@@ -25,11 +25,27 @@ class Snake extends Figure {
 
   private _reachedConstraint = "";
 
+  private _state = {
+    isDirectionChanged: false,
+  };
+
+  private _setState(newState) {
+    if (typeof newState !== "object" || newState === null) {
+      throw TypeError("new state should be an object");
+    }
+
+    this._state = { ...this._state, ...newState };
+  }
+
   private _segments: Array<{ x: number, y: number }> = [
     {
       x: CANVAS_WIDTH / 2,
       y: CANVAS_HEIGHT / 2,
-    }
+    },
+    {
+      x: CANVAS_WIDTH / 2 - this.width,
+      y: CANVAS_HEIGHT / 2,
+    },
   ];
 
   private _getHeadX() {
@@ -40,25 +56,10 @@ class Snake extends Figure {
     return this._segments[0].y;
   }
 
-  private _getTailX() {
-    return this._segments[this._segments.length - 1].x;
-  }
-
-  private _setTailX(x) {
-    this._segments[this._segments.length - 1].x = x;
-  }
-
-  private _getTailY() {
-    return this._segments[this._segments.length - 1].y;
-  }
-
-  private _setTailY(y) {
-    this._segments[this._segments.length - 1].y = y;
-  }
-
   constructor(
     board: GlobalEventHandlers,
     private _food,
+    private _mediator,
   ) {
     super();
 
@@ -73,25 +74,59 @@ class Snake extends Figure {
   public draw(ctx: CanvasRenderingContext2D) {
     this._reachedConstraint = "";
 
-    ctx.clearRect(
-      this._getTailX(),
-      this._getTailY(),
-      this.width,
-      this.height
-    );
-
-    ctx.fillStyle = this._color;
+    this._clear(ctx);
 
     this._handleConstraints();
 
     this._updateCoords();
 
     this._handleFoodCollision();
+    this._handleSelfCollision();
 
-    this._reDraw(ctx);
+    this._draw(ctx);
+
+    this._setState({
+      isDirectionChanged: false,
+    });
   }
 
-  private _reDraw(ctx) {
+  private _handleSelfCollision() {
+    let i;
+
+    const headX = this._getHeadX();
+    const headY = this._getHeadY();
+
+    this._segments.slice(1).forEach((segment, index) => {
+      if (segment.x == headX && segment.y === headY) {
+        i = index;
+      }
+    });
+
+    if (i !== undefined) {
+      this._cutSnake(i);
+    }
+  }
+
+  private _cutSnake(index) {
+    this._segments.length = index;
+  }
+
+  private _clear(ctx) {
+    // possibly we should not rerender all the snake on every tick
+    this._segments.forEach((segment) => {
+      ctx.clearRect(
+        segment.x,
+        segment.y,
+        this.width,
+        this.height,
+      );
+    });
+  }
+
+  private _draw(ctx) {
+    ctx.fillStyle = this._color;
+
+    // possibly we should not rerender all the snake on every tick
     this._segments.forEach((segment) => {
       ctx.fillRect(
         segment.x,
@@ -178,21 +213,39 @@ class Snake extends Figure {
       y < this._food.y + this._food.height &&
       this.height + y > this._food.y
     ) {
-      this._food.changePlace();
+      // should work on events
+      this._mediator.onFood();
       this._addTail();
     }
   }
 
   private _addListeners(board: GlobalEventHandlers) {
     board.addEventListener("keydown", (e: KeyboardEvent) => {
+      if (this._state.isDirectionChanged === true) {
+        return;
+      }
+
       if (e.code === "ArrowUp" && this._direction !== DIRECTIONS.DOWN) {
         this._direction = DIRECTIONS.UP;
+
+        this._setState({
+          isDirectionChanged: true,
+        });
       } else if (e.code === "ArrowDown" && this._direction !== DIRECTIONS.UP) {
         this._direction = DIRECTIONS.DOWN;
+        this._setState({
+          isDirectionChanged: true,
+        });
       } else if (e.code === "ArrowLeft" && this._direction !== DIRECTIONS.RIGHT) {
         this._direction = DIRECTIONS.LEFT;
+        this._setState({
+          isDirectionChanged: true,
+        });
       } else if (e.code === "ArrowRight" && this._direction !== DIRECTIONS.LEFT) {
         this._direction = DIRECTIONS.RIGHT;
+        this._setState({
+          isDirectionChanged: true,
+        });
       }
     });
   }
@@ -211,11 +264,11 @@ class Snake extends Figure {
         }),
         up: () => ({
           x: this._getHeadX(),
-          y: this._getHeadY() + this.height,
+          y: this._getHeadY() - this.height,
         }),
         down: () => ({
           x: this._getHeadX(),
-          y: this._getHeadY() - this.height,
+          y: this._getHeadY() + this.height,
         }),
       },
     );
@@ -276,30 +329,31 @@ class Page {
 
 }
 
-class Game {
-  private _timer = 1000 / 10;
+class Loop {
+  private _tickRate = 1000 / 10;
 
   constructor(
-    private _page,
+    private _ctx,
     private _updatables = [],
   ) {
-    setTimeout(() => {
-      if (this._timer !== 0) {
-        this._timer -= 10;
-      }
-    }, 60000);
+  }
 
+  public start() {
     this._update();
   }
 
-  _update = () => {
+  public increaseTickRate() {
+    this._tickRate -= 10;
+  }
+
+  private _update = () => {
     this._updatables.forEach(toUpdate => {
       toUpdate.draw(
-        this._page.context
+        this._ctx
       );
     });
 
-    setTimeout(this._update, this._timer);
+    setTimeout(this._update, this._tickRate);
   }
 }
 
@@ -320,8 +374,8 @@ class Food extends Figure {
 
   private _recalcPosition() {
     const quads = CANVAS_WIDTH / this.width;
-    this.x = Math.floor(Math.random() * quads - 1) * 10;
-    this.y = Math.floor(Math.random() * quads - 1) * 10;
+    this.x = Math.floor(Math.random() * (quads - 1)) * 10;
+    this.y = Math.floor(Math.random() * (quads - 1)) * 10;
   }
 
   public draw(ctx) {
@@ -344,10 +398,65 @@ class Food extends Figure {
   }
 }
 
-const page = new Page();
-const food = new Food();
+class Score {
+  private _score = 0;
+  private _fontSize = 14;
 
-new Game(
-  page,
-  [new Snake(document, food), food]
-);
+  constructor(private _ctx) {
+    this.draw();
+  }
+
+  _clear() {
+    this._ctx.font = `${this._fontSize}px serif`;
+    this._ctx.fillStyle = '#ffffff';
+    const text = `Score: ${this._score}`;
+    const measure = this._ctx.measureText(text)
+    this._ctx.clearRect(10, 20 - this._fontSize, measure.width, 14);
+  }
+
+  draw() {
+    this._ctx.font = '14px serif';
+    this._ctx.fillStyle = 'red';
+    this._ctx.fillText(`Score: ${this._score}`, 10, 20);
+  }
+
+  getScore() {
+    return this._score;
+  }
+
+  upScore() {
+    this._clear();
+
+    this._score += 1;
+
+    this.draw();
+  }
+}
+
+const mediator = {
+  loop: null,
+  score: null,
+  food: null,
+
+  onFood() {
+    this.score.upScore();
+
+    if (this.score.getScore() % 15 === 0) {
+      this.loop.increaseTickRate();
+    }
+
+    this.food.changePlace();
+  },
+};
+
+const food = new Food();
+const page = new Page();
+const snake = new Snake(document, food, mediator);
+const score = new Score(page.context);
+const loop = new Loop(page.context, [snake, food, score]);
+
+mediator.loop = loop;
+mediator.score = score;
+mediator.food = food;
+
+loop.start();
